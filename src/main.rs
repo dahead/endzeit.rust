@@ -1,14 +1,37 @@
 use clap::Parser;
-use chrono::{Local, NaiveDate, NaiveDateTime};
+use chrono::{
+    Local,
+    NaiveDate,
+    NaiveDateTime
+};
 use std::str::FromStr;
 use std::thread;
 use std::time::Duration;
 use std::process::Command;
 use std::io;
-use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Gauge};
-use ratatui::backend::CrosstermBackend;
-use crossterm::{ event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}, };
+use color_eyre::Result;
+use ratatui::{
+    buffer::Buffer,
+    crossterm::event::{
+        self,
+        Event,
+        KeyCode
+    },
+    layout::{
+        Rect
+    },
+    style::{
+        Color,
+        Style
+    },
+    widgets::{
+        Gauge,
+        // Block,
+        // Borders,
+        Widget
+    },
+    DefaultTerminal,
+};
 
 #[derive(Parser)]
 struct Cli {
@@ -25,6 +48,130 @@ struct Cli {
     execute: Option<String>,
 }
 
+struct App {
+    // target_datetime: NaiveDateTime,
+    start_instant: std::time::Instant,
+    total_seconds: f64,
+    execute_command: Option<String>,
+}
+
+fn main() -> Result<()> {
+    color_eyre::install()?;
+    let args = Cli::parse();
+
+    // Get today's date if no date is provided
+    let date = match args.date {
+        Some(ref d) => NaiveDate::parse_from_str(d, "%Y-%m-%d").expect("Invalid date format, use YYYY-MM-DD"),
+        None => Local::now().naive_local().into(),
+    };
+
+    // Validate and combine date and time
+    let target_datetime = validate_datetime(date, args.time.as_deref());
+
+    let now = Local::now().naive_local();
+    if target_datetime <= now {
+        eprintln!("Target date/time must be in the future");
+        std::process::exit(1);
+    }
+
+    let terminal = ratatui::init();
+    let app_result = App::new(target_datetime, args.execute).run(terminal);
+    ratatui::restore();
+    app_result
+}
+
+impl App {
+    fn new(target_datetime: NaiveDateTime, execute_command: Option<String>) -> Self {
+        let now = Local::now().naive_local();
+        let total_duration = target_datetime - now;
+
+        Self {
+            // target_datetime,
+            start_instant: std::time::Instant::now(),
+            total_seconds: total_duration.num_seconds() as f64,
+            execute_command,
+        }
+    }
+
+    fn run(self, mut terminal: DefaultTerminal) -> Result<()> {
+        loop {
+            terminal.draw(|frame| frame.render_widget(&self, frame.area()))?;
+
+            if self.is_finished() {
+                break;
+            }
+
+            if self.should_quit()? {
+                break;
+            }
+
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        self.handle_completion();
+        Ok(())
+    }
+
+    fn is_finished(&self) -> bool {
+        let elapsed = self.start_instant.elapsed().as_secs_f64();
+        elapsed >= self.total_seconds
+    }
+
+    fn should_quit(&self) -> Result<bool> {
+        if event::poll(Duration::from_millis(200))? {
+            if let Event::Key(key) = event::read()? {
+                return Ok(key.code == KeyCode::Char('q'));
+            }
+        }
+        Ok(false)
+    }
+
+    fn get_remaining_time(&self) -> f64 {
+        let elapsed = self.start_instant.elapsed().as_secs_f64();
+        (self.total_seconds - elapsed).max(0.0)
+    }
+
+    fn get_progress_percentage(&self) -> f64 {
+        let elapsed = self.start_instant.elapsed().as_secs_f64();
+        if self.total_seconds > 0.0 {
+            (elapsed / self.total_seconds).min(1.0) * 100.0
+        } else {
+            100.0
+        }
+    }
+
+    fn handle_completion(&self) {
+        if let Some(exec_command) = &self.execute_command {
+            match execute_file(exec_command) {
+                Ok(_) => {},
+                Err(e) => eprintln!("Failed to execute file: {}", e),
+            }
+        }
+    }
+}
+
+impl Widget for &App {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        self.render_gauge(area, buf);
+    }
+}
+
+impl App {
+    fn render_gauge(&self, area: Rect, buf: &mut Buffer) {
+        let remaining = self.get_remaining_time();
+        let percentage = self.get_progress_percentage();
+
+        let gauge = Gauge::default()
+            // .block(Block::default()
+            //     .title(format!("Endzeit: {}", self.target_datetime))  // Use it here
+            //     .borders(Borders::ALL))
+            .gauge_style(Style::default().fg(Color::Green).bg(Color::Black))
+            .percent(percentage as u16)
+            .label(format!("Time left: {:.0}s", remaining));
+
+        gauge.render(area, buf);
+    }
+}
 fn parse_time(time: &str) -> Result<(u32, u32, u32), String> {
     let parts: Vec<&str> = time.split(':').collect();
     match parts.len() {
@@ -63,7 +210,7 @@ fn validate_datetime(date: NaiveDate, time: Option<&str>) -> NaiveDateTime {
     }
 }
 
-fn  execute_file(command_with_args: &str) -> io::Result<()> {
+fn execute_file(command_with_args: &str) -> io::Result<()> {
     if cfg!(target_os = "windows") {
         Command::new("cmd")
             .args(["/C", command_with_args])
@@ -75,109 +222,4 @@ fn  execute_file(command_with_args: &str) -> io::Result<()> {
     };
 
     Ok(())
-}
-
-fn main() {
-    let args = Cli::parse();
-
-    // Get today's date if no date is provided
-    let date = match args.date {
-        Some(ref d) => NaiveDate::parse_from_str(d, "%Y-%m-%d").expect("Invalid date format, use YYYY-MM-DD"),
-        None => Local::now().naive_local().into(),
-    };
-
-    // Validate and combine date and time
-    let target_datetime = validate_datetime(date, args.time.as_deref());
-
-    let now = Local::now().naive_local();
-    if target_datetime <= now {
-        eprintln!("Target date/time must be in the future");
-        std::process::exit(1);
-    }
-
-    // --- Set up ratatui terminal -----------------------------------------
-    enable_raw_mode().expect("Failed to enable raw mode");
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture).expect("Failed to enter alternate screen");
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).expect("Failed to create terminal");
-    // -----------------------------------------------------------------------
-
-    let total_duration = target_datetime - now;
-    let total_seconds = total_duration.num_seconds() as f64;
-    let start_instant = std::time::Instant::now();
-
-    // Main UI loop
-    loop {
-        // Calculate elapsed time
-        let elapsed = start_instant.elapsed().as_secs_f64();
-        let remaining = if total_seconds - elapsed > 0.0 {
-            total_seconds - elapsed
-        } else {
-            0.0
-        };
-
-        // Calculate progress percentage
-        let percentage = if total_seconds > 0.0 {
-            (elapsed / total_seconds).min(1.0) * 100.0
-        } else {
-            100.0
-        };
-
-        // --- Render UI ----------------------------------------------------
-        terminal.draw(|f| {
-            let size = f.area();
-
-            // Create a block for the overall layout
-            let block = Block::default()
-                .title(format!("Endzeit: {}", target_datetime))
-                .borders(Borders::ALL);
-            f.render_widget(block, size);
-
-            // Gauge widget with remaining time label
-            let gauge = Gauge::default()
-                .block(Block::default().title("Progress").borders(Borders::ALL))
-                .gauge_style(Style::default().fg(Color::Green).bg(Color::Black))
-                .percent(percentage as u16)
-                .label(format!("Time left: {:.0}s", remaining));
-            f.render_widget(gauge, size);
-        })
-            .expect("Failed to draw UI");
-
-        // Exit if countdown is finished or user presses 'q'
-        if remaining <= 0.0 {
-            break;
-        }
-
-        if event::poll(Duration::from_millis(200)).expect("Failed to poll events") {
-            if let Event::Key(key) = event::read().expect("Failed to read event") {
-                if key.code == KeyCode::Char('q') {
-                    break;
-                }
-            }
-        }
-
-        // Sleep for a short interval to reduce CPU usage
-        thread::sleep(Duration::from_millis(100));
-    }
-
-    // --- Clean up terminal -----------------------------------------------
-    disable_raw_mode().expect("Failed to disable raw mode");
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    ).expect("Failed to leave alternate screen");
-    terminal.show_cursor().expect("Failed to show cursor");
-    // -----------------------------------------------------------------------
-
-    // Do endzeit action
-    if let Some(exec_command) = args.execute {
-        match execute_file(&exec_command) {
-            Ok(_) => {},
-            Err(e) => eprintln!("Failed to execute file: {}", e),
-        }
-    } else {
-        println!("\nEndzeit reached!");
-    }
 }
