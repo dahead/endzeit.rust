@@ -3,12 +3,12 @@ use chrono::{Local, NaiveDate, NaiveDateTime};
 use std::str::FromStr;
 use std::thread;
 use std::time::Duration;
+use std::process::Command;
+use std::io;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Gauge};
 use ratatui::backend::CrosstermBackend;
 use crossterm::{ event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}, };
-use std::process::Command;
-use std::io;
 
 #[derive(Parser)]
 struct Cli {
@@ -24,7 +24,6 @@ struct Cli {
     #[clap(long)]
     execute: Option<String>,
 }
-
 
 fn parse_time(time: &str) -> Result<(u32, u32, u32), String> {
     let parts: Vec<&str> = time.split(':').collect();
@@ -64,25 +63,20 @@ fn validate_datetime(date: NaiveDate, time: Option<&str>) -> NaiveDateTime {
     }
 }
 
-fn execute_file(command_with_args: &str) -> io::Result<()> {
-    let output = if cfg!(target_os = "windows") {
+fn  execute_file(command_with_args: &str) -> io::Result<()> {
+    if cfg!(target_os = "windows") {
         Command::new("cmd")
             .args(["/C", command_with_args])
-            .output()?
+            .status()?;
     } else {
         Command::new("sh")
             .args(["-c", command_with_args])
-            .output()?
+            .status()?;
     };
-
-    if output.status.success() {
-        println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    } else {
-        eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-    }
 
     Ok(())
 }
+
 fn main() {
     let args = Cli::parse();
 
@@ -180,7 +174,7 @@ fn main() {
     // Do endzeit action
     if let Some(exec_command) = args.execute {
         match execute_file(&exec_command) {
-            Ok(_) => println!("File executed successfully"),
+            Ok(_) => {},
             Err(e) => eprintln!("Failed to execute file: {}", e),
         }
     } else {
