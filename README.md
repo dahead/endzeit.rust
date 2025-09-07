@@ -41,7 +41,7 @@ The project uses the following Rust dependencies:
 
 1. **Clone the Repository**:
    ```sh
-   git clone https://github.com/your-repo/endzeit.rust.git
+   git clone https://github.com/dahead/endzeit.rust.git
    cd endzeit.rust
    ```
 
