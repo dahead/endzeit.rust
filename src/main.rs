@@ -49,10 +49,20 @@ struct Cli {
 }
 
 struct App {
-    // target_datetime: NaiveDateTime,
     start_instant: std::time::Instant,
     total_seconds: f64,
     execute_command: Option<String>,
+}
+
+#[derive(Debug)]
+struct TimeRemaining {
+    years: u64,
+    months: u64,
+    weeks: u64,
+    days: u64,
+    hours: u64,
+    minutes: u64,
+    seconds: u64,
 }
 
 fn main() -> Result<()> {
@@ -86,7 +96,6 @@ impl App {
         let total_duration = target_datetime - now;
 
         Self {
-            // target_datetime,
             start_instant: std::time::Instant::now(),
             total_seconds: total_duration.num_seconds() as f64,
             execute_command,
@@ -105,7 +114,7 @@ impl App {
                 break;
             }
 
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(333));
         }
 
         self.handle_completion();
@@ -126,35 +135,44 @@ impl App {
         Ok(false)
     }
 
-    fn get_remaining_time(&self) -> (u64, u64, u64, u64, u64, u64, u64) {
-        let elapsed = self.start_instant.elapsed().as_secs();
-        let remaining_seconds = self.total_seconds as u64 - elapsed;
+    fn get_remaining_time(&self) -> TimeRemaining {
+        let remaining_seconds = (self.total_seconds as u64).saturating_sub(
+            self.start_instant.elapsed().as_secs()
+        );
 
+        const SECONDS_IN_MINUTE: u64 = 60;
+        const SECONDS_IN_HOUR: u64 = 3600;
         const SECONDS_IN_DAY: u64 = 86_400;
-        const MINUTES_IN_HOUR: u64 = 60;
-        const DAYS_IN_WEEK: u64 = 7;
-        const MONTHS_IN_YEAR: u64 = 12;
+        const SECONDS_IN_WEEK: u64 = 604_800;
 
-        let days = remaining_seconds / SECONDS_IN_DAY;
-        let weeks = days / (DAYS_IN_WEEK );
-        let months = weeks / ((DAYS_IN_WEEK ) * 4); // Approximating a month as 4 weeks
-        let years = months / (MONTHS_IN_YEAR);
+        let years = remaining_seconds / (SECONDS_IN_DAY * 365);
+        let remaining_after_years = remaining_seconds % (SECONDS_IN_DAY * 365);
 
-        let remainder_days = days % (DAYS_IN_WEEK);
-        let remainder_weeks = weeks % ((DAYS_IN_WEEK) * 4);
-        let remainder_months = months % (MONTHS_IN_YEAR );
+        let months = remaining_after_years / (SECONDS_IN_DAY * 30); // Approximating a month as 30 days
+        let remaining_after_months = remaining_after_years % (SECONDS_IN_DAY * 30);
 
-        (
+        let weeks = remaining_after_months / SECONDS_IN_WEEK;
+        let remaining_after_weeks = remaining_after_months % SECONDS_IN_WEEK;
+
+        let days = remaining_after_weeks / SECONDS_IN_DAY;
+        let remaining_after_days = remaining_after_weeks % SECONDS_IN_DAY;
+
+        let hours = remaining_after_days / SECONDS_IN_HOUR;
+        let remaining_after_hours = remaining_after_days % SECONDS_IN_HOUR;
+
+        let minutes = remaining_after_hours / SECONDS_IN_MINUTE;
+        let seconds = remaining_after_hours % SECONDS_IN_MINUTE;
+
+        TimeRemaining {
             years,
-            remainder_months,
-            remainder_weeks / DAYS_IN_WEEK,
-            remainder_days,
-            ((remaining_seconds % SECONDS_IN_DAY) / (MINUTES_IN_HOUR as u64 * 60)),
-            (((remaining_seconds % SECONDS_IN_DAY) / MINUTES_IN_HOUR as u64) % 60),
-            (remaining_seconds % 60)
-        )
+            months,
+            weeks,
+            days,
+            hours,
+            minutes,
+            seconds
+        }
     }
-
 
     fn get_progress_percentage(&self) -> f64 {
         let elapsed = self.start_instant.elapsed().as_secs_f64();
@@ -183,7 +201,7 @@ impl Widget for &App {
 
 impl App {
     fn render_gauge(&self, area: Rect, buf: &mut Buffer) {
-        let (years, months, weeks, days, hours, minutes, seconds) = self.get_remaining_time();
+        let TimeRemaining { years, months, weeks, days, hours, minutes, seconds } = self.get_remaining_time();
 
         // Format the time string
         let mut time_string = String::new();
@@ -191,22 +209,24 @@ impl App {
         if years > 0 {
             time_string.push_str(&format!("{}y ", years));
         }
-        if months > 0 {
+        // Only append months and weeks if they are non-zero or there are no other units
+        if (months > 0 && time_string.is_empty()) || (!time_string.is_empty() && months > 0) {
             time_string.push_str(&format!("{}m ", months));
         }
-        if weeks > 0 {
+        if (weeks > 0 && time_string.is_empty()) || (!time_string.is_empty() && weeks > 0) {
             time_string.push_str(&format!("{}w ", weeks));
         }
-        if days > 0 {
+        if (days > 0 && time_string.is_empty()) || (!time_string.is_empty() && days > 0) {
             time_string.push_str(&format!("{}d ", days));
         }
-        if hours > 0 || time_string.is_empty() {
+        // Only append hours, minutes, and seconds if they are non-zero or there are no other units
+        if (hours > 0 && time_string.is_empty()) || (!time_string.is_empty() && hours > 0) {
             time_string.push_str(&format!("{}h ", hours));
         }
-        if minutes > 0 || time_string.is_empty() {
+        if (minutes > 0 && time_string.is_empty()) || (!time_string.is_empty() && minutes > 0) {
             time_string.push_str(&format!("{}m ", minutes));
         }
-        if seconds > 0 || time_string.is_empty() {
+        if seconds > 0 || !time_string.is_empty() {
             time_string.push_str(&format!("{}s", seconds));
         }
 
@@ -218,7 +238,6 @@ impl App {
         gauge.render(area, buf);
     }
 }
-
 
 fn parse_time(time: &str) -> Result<(u32, u32, u32), String> {
     let parts: Vec<&str> = time.split(':').collect();
