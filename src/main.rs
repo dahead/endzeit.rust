@@ -126,10 +126,35 @@ impl App {
         Ok(false)
     }
 
-    fn get_remaining_time(&self) -> f64 {
-        let elapsed = self.start_instant.elapsed().as_secs_f64();
-        (self.total_seconds - elapsed).max(0.0)
+    fn get_remaining_time(&self) -> (u64, u64, u64, u64, u64, u64, u64) {
+        let elapsed = self.start_instant.elapsed().as_secs();
+        let remaining_seconds = self.total_seconds as u64 - elapsed;
+
+        const SECONDS_IN_DAY: u64 = 86_400;
+        const MINUTES_IN_HOUR: u64 = 60;
+        const DAYS_IN_WEEK: u64 = 7;
+        const MONTHS_IN_YEAR: u64 = 12;
+
+        let days = remaining_seconds / SECONDS_IN_DAY;
+        let weeks = days / (DAYS_IN_WEEK );
+        let months = weeks / ((DAYS_IN_WEEK ) * 4); // Approximating a month as 4 weeks
+        let years = months / (MONTHS_IN_YEAR);
+
+        let remainder_days = days % (DAYS_IN_WEEK);
+        let remainder_weeks = weeks % ((DAYS_IN_WEEK) * 4);
+        let remainder_months = months % (MONTHS_IN_YEAR );
+
+        (
+            years,
+            remainder_months,
+            remainder_weeks / DAYS_IN_WEEK,
+            remainder_days,
+            ((remaining_seconds % SECONDS_IN_DAY) / (MINUTES_IN_HOUR as u64 * 60)),
+            (((remaining_seconds % SECONDS_IN_DAY) / MINUTES_IN_HOUR as u64) % 60),
+            (remaining_seconds % 60)
+        )
     }
+
 
     fn get_progress_percentage(&self) -> f64 {
         let elapsed = self.start_instant.elapsed().as_secs_f64();
@@ -158,20 +183,43 @@ impl Widget for &App {
 
 impl App {
     fn render_gauge(&self, area: Rect, buf: &mut Buffer) {
-        let remaining = self.get_remaining_time();
-        let percentage = self.get_progress_percentage();
+        let (years, months, weeks, days, hours, minutes, seconds) = self.get_remaining_time();
+
+        // Format the time string
+        let mut time_string = String::new();
+
+        if years > 0 {
+            time_string.push_str(&format!("{}y ", years));
+        }
+        if months > 0 {
+            time_string.push_str(&format!("{}m ", months));
+        }
+        if weeks > 0 {
+            time_string.push_str(&format!("{}w ", weeks));
+        }
+        if days > 0 {
+            time_string.push_str(&format!("{}d ", days));
+        }
+        if hours > 0 || time_string.is_empty() {
+            time_string.push_str(&format!("{}h ", hours));
+        }
+        if minutes > 0 || time_string.is_empty() {
+            time_string.push_str(&format!("{}m ", minutes));
+        }
+        if seconds > 0 || time_string.is_empty() {
+            time_string.push_str(&format!("{}s", seconds));
+        }
 
         let gauge = Gauge::default()
-            // .block(Block::default()
-            //     .title(format!("Endzeit: {}", self.target_datetime))  // Use it here
-            //     .borders(Borders::ALL))
             .gauge_style(Style::default().fg(Color::Green).bg(Color::Black))
-            .percent(percentage as u16)
-            .label(format!("Time left: {:.0}s", remaining));
+            .percent(self.get_progress_percentage() as u16)
+            .label(time_string);
 
         gauge.render(area, buf);
     }
 }
+
+
 fn parse_time(time: &str) -> Result<(u32, u32, u32), String> {
     let parts: Vec<&str> = time.split(':').collect();
     match parts.len() {
